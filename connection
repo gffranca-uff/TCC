@@ -1,0 +1,288 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+# DETECÇÃO DE CÉDULAS DO NOVO REAL UTILIZANDO COLOR SPACES, FEATURE MATCHING
+
+# OUTRAS NOTAS
+# CLASSIFICAR ACC, ERR, 
+
+# 1) ---------- CONFIGURAÇÕES GLOBAIS ----------
+SOURCE = './mydataset/white_test'  #'http://192.168.15.11:4747/video'
+GOOD_DESCRIPTOR_DISTANCE = 0.7
+BEST_DESCRIPTOR_DISTANCE = 0.62
+MIN_GOOD_MATCHES = 50
+MIN_CONTOUR_AREA = 1800
+
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+FONT_SCALE = 2
+FONT_COLOR = (0, 0, 255)
+FONT_THICKNESS = 3
+
+# sift_limited = cv2.SIFT_create()
+sift = cv2.SIFT_create()
+capture = None
+source_files = []
+last_source_file = -1
+current_source_file = 0
+
+
+# 3) ---------- FUNÇÕES AUXILIARES ----------
+def getNextFrameFromSource():
+    global capture
+    global source_files
+    global current_source_file
+    if SOURCE.startswith('http'):
+        if capture is None:
+            capture = cv2.VideoCapture(SOURCE)
+        return capture.read()
+    
+    if source_files == []:
+        source_files = os.listdir(SOURCE)
+        source_files = [(SOURCE + '/' + f) for f in source_files if os.path.isfile(SOURCE + '/' + f)] 
+        
+    return cv2.imread(source_files[current_source_file])
+
+
+def findDesctriptors(images: dict[cv2.Mat]):
+    dict_descriptors = {}
+    for imageKey in images:
+        kp1, des = sift.detectAndCompute(images[imageKey], None)
+        dict_descriptors.update({imageKey: (kp1, des)})
+        print(imageKey, 'detectou', len(des), 'keypoints')
+    return dict_descriptors
+
+
+def tryGetMatchID(image: cv2.Mat, dict_descriptors):
+    kp2, des = sift.detectAndCompute(image, None)
+    bf = cv2.BFMatcher()
+    matchesPerID = {}
+    goodMatches = {}
+    try:
+        for descriptorKey in dict_descriptors:
+            matches = bf.knnMatch(dict_descriptors[descriptorKey][1], des, k=2)
+            # Apply ratio test
+            good = []
+            for m,n in matches:
+                if m.distance < GOOD_DESCRIPTOR_DISTANCE * n.distance:
+                    good.append(m)
+            matchesPerID.update({descriptorKey: len(good)})
+            goodMatches.update({descriptorKey: good})
+    except:
+        pass
+    print(matchesPerID)
+    if len(matchesPerID) == 0:
+        return '', None
+    if all(maxMatches < MIN_GOOD_MATCHES for maxMatches in matchesPerID.values()):
+        return '', None
+    
+    try:
+        max_ratio = -1
+        matchID = ''
+        for matcheskey in matchesPerID:
+            this_ratio = matchesPerID[matcheskey] / len(dict_descriptors[matcheskey][1])
+            if this_ratio > max_ratio:
+                max_ratio = this_ratio
+                matchID = matcheskey
+        
+        src_pts = np.float32([ dict_descriptors[matchID][0][m.queryIdx].pt for m in goodMatches[matchID] ]).reshape(-1,1,2)
+        dst_pts = np.float32([ kp2[m.trainIdx].pt for m in goodMatches[matchID] ]).reshape(-1,1,2)
+        homography, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        
+        return matchID, homography
+    except:
+        pass
+    
+    return '', None
+
+
+def getMaskedRegion(region, mask: cv2.Mat):
+    canvas = np.zeros_like(mask)
+    cv2.fillPoly(canvas, [np.int32(region)], (255,255,255))
+    canvas = cv2.bitwise_and(canvas, mask)
+    
+    contours, hierarchy = cv2.findContours(canvas, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    # loop over the contours
+    for cnt in contours:
+        # if the contour is good, draw it on the mask
+        if cv2.contourArea(cnt) > MIN_CONTOUR_AREA:
+            # epsilon = 0.1 * cv2.arcLength(cnt, True)
+            # approx = cv2.approxPolyDP(cnt, epsilon, True)
+            rect = cv2.minAreaRect(cnt)
+            box = cv2.boxPoints(rect)
+            box = np.intp(box)
+            return box, cnt
+    return region, None
+
+
+def getMatchRegionFromHomography(fromImage: cv2.Mat, homography):
+    h, w, d = fromImage.shape
+    pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
+    return cv2.perspectiveTransform(pts,homography)
+
+
+def skeletonize(image: cv2.Mat) -> cv2.Mat:
+    # Structuring Element
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS,(3,3))
+    # Create an empty output image to hold values
+    thin = np.zeros(image.shape, dtype='uint8')
+    # Loop until erosion leads to an empty set
+    while (cv2.countNonZero(image)!=0):
+        # Erosion
+        erode = cv2.erode(image, kernel)
+        # Opening on eroded image
+        opening = cv2.morphologyEx(erode, cv2.MORPH_OPEN, kernel)
+        # Subtract these two
+        subset = erode - opening
+        # Union of all previous sets
+        thin = cv2.bitwise_or(subset, thin)
+        # Set the eroded image for next iteration
+        image = erode.copy()
+    return thin
+  
+
+# normaize the grayscale image
+def nm(img):
+   normalizedImg = np.zeros(img.shape)
+   return cv2.normalize(img, normalizedImg, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)  
+
+
+# 2) ---------- INICIALIZAÇÃO DE VARIAVEIS ----------
+values = {}
+
+values.update({"f200": cv2.imread('./mydataset/small_white_key/f200.jpeg')})
+values.update({"f100": cv2.imread('./mydataset/small_white_key/f100.jpeg')})
+values.update({"f050": cv2.imread('./mydataset/small_white_key/f050.jpeg')})
+values.update({"f020": cv2.imread('./mydataset/small_white_key/f020.jpeg')})
+values.update({"f010": cv2.imread('./mydataset/small_white_key/f010.jpeg')})
+values.update({"f005": cv2.imread('./mydataset/small_white_key/f005.jpeg')})
+values.update({"f002": cv2.imread('./mydataset/small_white_key/f002.jpeg')})
+values.update({"v200": cv2.imread('./mydataset/small_white_key/v200.jpeg')})
+values.update({"v100": cv2.imread('./mydataset/small_white_key/v100.jpeg')})
+values.update({"v050": cv2.imread('./mydataset/small_white_key/v050.jpeg')})
+values.update({"v020": cv2.imread('./mydataset/small_white_key/v020.jpeg')})
+values.update({"v010": cv2.imread('./mydataset/small_white_key/v010.jpeg')})
+values.update({"v005": cv2.imread('./mydataset/small_white_key/v005.jpeg')})
+values.update({"v002": cv2.imread('./mydataset/small_white_key/v002.jpeg')})
+
+# resize
+for imageKey in values:
+    values[imageKey] = cv2.resize(values[imageKey], (800, 480), interpolation = cv2.INTER_NEAREST)
+
+descriptorsPerValue = findDesctriptors(values)
+
+
+while(True):
+    if cv2.waitKey(1) == ord('q'):
+        break
+    
+    if cv2.waitKey(1) == ord('p'):
+        print('Carregando proxima imagem...')
+        current_source_file += 1
+    
+    # 1) ---------- CAPTURA ----------
+    if capture is None and last_source_file == current_source_file:
+        continue
+    last_source_file = current_source_file
+    from_source = getNextFrameFromSource()
+    
+    if type(from_source) is tuple:
+        (ret, frame_original) = from_source
+    else:
+        frame_original = from_source
+    
+    # 2) ---------- PRE PROCESSAMENTO ----------
+    if frame_original.size > 1512 * 2012:
+        frame_original = cv2.resize(frame_original, (1512, 2012))
+        
+    frame_gray = cv2.cvtColor(frame_original, cv2.COLOR_BGR2GRAY)
+    
+    frame_median = cv2.medianBlur(frame_gray, 5)
+    
+    low_freq = cv2.GaussianBlur(frame_median, (5, 5), 0) 
+    high_freq = cv2.GaussianBlur(frame_median, (9, 9), 0) 
+    frame_dog = low_freq - high_freq
+    
+    frame_dog = cv2.medianBlur(frame_dog, 5)
+    mask_median = cv2.medianBlur(frame_dog, 5)
+    
+    kernel = np.ones((3, 3), np.uint8)
+    mask_dilated = cv2.dilate(mask_median, kernel, iterations=3)
+    mask_dilated = cv2.erode(mask_dilated, kernel, iterations=2)
+    mask_median = cv2.medianBlur(mask_dilated, 5)
+    
+    
+    
+    
+    # 3) ---------- DETECÇÃO DE REGIÕES ----------
+    binary_image = np.zeros((mask_median.shape[0], mask_median.shape[1]), np.uint8)
+    contours, hierarchy = cv2.findContours(mask_median, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # loop over the contours
+    for cnt in contours:
+        # if the contour is good, draw it on the mask
+        if cv2.contourArea(cnt) > MIN_CONTOUR_AREA:
+            # epsilon = 0.07 * cv2.arcLength(cnt, True)
+            # approx = cv2.approxPolyDP(cnt, epsilon, True)
+            cv2.drawContours(binary_image, [cnt], -1, (255, 255, 255), -1)
+
+
+
+    # 4) ---------- CLASSIFICAÇÃO DAS REGIÕES ----------
+    regions = []
+    overlay = frame_original.copy()
+    matchID, homography = tryGetMatchID(frame_original, descriptorsPerValue)
+    while matchID:
+        matchRegion = getMatchRegionFromHomography(values[matchID], homography)
+        
+        matchRegion, cntRegion = getMaskedRegion(matchRegion, binary_image)
+        cv2.fillPoly(frame_original, [np.int32(matchRegion)], (255,255,255))
+        # cv2.fillPoly(frame_original, [np.int32(maskedRegion)], (120,120,120))
+        
+        matchRegion_int = np.int32(matchRegion)
+        is_matchRegion_convex = cv2.isContourConvex(matchRegion_int)
+        # if the contour is good, save it
+        if is_matchRegion_convex and matchRegion.shape[0] == 4:
+            regions.append((matchID, matchRegion, cntRegion))
+            print('Detectado nota:', matchID)
+        matchID, homography = tryGetMatchID(frame_original, descriptorsPerValue)
+    
+    
+    
+    # 5) ---------- RESULTADOS ----------
+    totalValue = 0
+    for reg in regions:
+        region = reg[1]
+        insideRegion = reg[2]
+        strValue = reg[0][1:]
+        pts = np.array(region, np.int32)
+        center = np.mean(pts, axis=0).astype(np.int32)
+        cx, cy = center[0], center[1]
+        text = strValue
+        size, _ = cv2.getTextSize(text, FONT, FONT_SCALE, FONT_THICKNESS)
+        text_x = cx - size[0] // 2
+        text_y = cy + size[1] // 2
+        cv2.putText(overlay, text, (text_x, text_y), FONT, FONT_SCALE, FONT_COLOR, FONT_THICKNESS)
+        cv2.polylines(overlay, [np.int32(insideRegion)], True, (0, 0, 190), 2, cv2.LINE_AA)
+        cv2.polylines(overlay, [np.int32(region)], True, (255, 0, 0), 3, cv2.LINE_AA)
+        totalValue += int(strValue)
+        
+    cv2.putText(overlay, 'Total:' + str(totalValue), (20, 70), FONT, FONT_SCALE, FONT_COLOR, FONT_THICKNESS)
+    print('Total de R$ {}, com {} notas'.format(totalValue, len(regions)))
+    
+    
+    cv2.namedWindow("main-camera", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("overlay", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("binary", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("mask", cv2.WINDOW_NORMAL)
+    
+    cv2.imshow('main-camera', frame_original)
+    cv2.imshow('overlay', overlay)
+    cv2.imshow('binary', binary_image)
+    cv2.imshow('mask', mask_median)
+    
+
+if capture:
+    capture.release()
+cv2.destroyAllWindows()
