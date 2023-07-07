@@ -1,5 +1,5 @@
 Titulo:
-Ferramenta de detecção e contagem de notas de Real Brasileiro para auxílio de pessoas com deficiência visual
+DETECÇÃO DE MÚLTIPLAS NOTAS DE REAL BRASILEIRO: UMA ABORDAGEM CLÁSSICA
 
-Objetivo:
-Este trabalho tem como objetivo desenvolver um sistema de detecção e contagem de notas de Real Brasileiro por meio de processamento de imagem. A solução tem como um dos objetivos principais a contagem automatizada de notas, bem como a identificação de múltiplas cédulas e cédulas parcialmente cobertas. Além disso, espera-se que a ferramenta possa ser utilizada para auxiliar pessoas com deficiência visual a identificar as notas e aumentar a sua acessibilidade.
+Resumo:
+Este trabalho de final de curso apresenta um método para a detecção e identificação de múltiplas cédulas do Real em imagens, mesmo que estejam parcialmente sobrepostas ou dobradas. A ferramenta desenvolvida tem como objeto de estudo encontrar novas técnicas que garantam a acessibilidade das pessoas com deficiência visual do Brasil ao detectar notas do Real em imagens não preparadas do dia a dia. Neste trabalho, foram utilizados apenas métodos clássicos de processamento de imagens e visão computacional, como o algoritmo Scale-Invariant Feature Transform (SIFT) e Brute Force Matching para a detecção e classificação.
